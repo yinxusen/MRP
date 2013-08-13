@@ -61,9 +61,12 @@ public class MRP {
 
 	List<DoubleMatrix1D> GF = null;
 	List<DoubleMatrix1D> GA = null;
-	List<DoubleMatrix1D> reverseGA = null;
 	List<DoubleMatrix1D> featureF = null;
 	List<DoubleMatrix1D> featureA = null;
+
+	List<DoubleMatrix1D> reverseGF = null;
+	List<DoubleMatrix1D> reverseGA = null;
+	List<DoubleMatrix1D> reverseFeatureF = null;
 
 	Map<String, Integer> userMap = null;
 	Map<String, Integer> attrMap = null;
@@ -109,18 +112,21 @@ public class MRP {
 	 * An updater for Hidden Vector
 	 */
 	public void updateHV(DoubleMatrix1D ls, int curIdx, Predict pp, double lambda1, double lambda2,
-			DoubleMatrix2D freeVar, DoubleMatrix2D fixVar, double lr) {
+			DoubleMatrix2D freeVar, DoubleMatrix2D fixVar, double lr, boolean reverse) {
 		IntArrayList idx = new IntArrayList();
 		DoubleArrayList val = new DoubleArrayList();
 		ls.getNonZeros(idx, val);
 		int len = idx.size();
-		System.err.println(len);
 		for (int i = 0; i < len; i++) {
-			System.err.println(i);
 			int ssId = idx.get(i);
 			double sweight = val.get(i);
 			DoubleMatrix1D d1 = DoubleFactory1D.dense.make(dimLatent);
-			double fakeVal = pp.predict(curIdx, ssId);
+			double fakeVal = 0.0;
+			if (!reverse) {
+				fakeVal = pp.predict(curIdx, ssId);
+			} else {
+				fakeVal = pp.predict(ssId, curIdx);
+			}
 			blas.daxpy(lambda1 * l2.getPartialDerivation(sweight, fakeVal), fixVar.viewRow(ssId), d1);
 			assert (algebra.norm2(freeVar.viewRow(curIdx)) != 0);
 			DoubleMatrix1D d2 = d1.like();
@@ -150,15 +156,26 @@ public class MRP {
 		this.GA = new ArrayList<DoubleMatrix1D>();
 		this.featureF = new ArrayList<DoubleMatrix1D>();
 		this.featureA = new ArrayList<DoubleMatrix1D>();
+		this.reverseGF = new ArrayList<DoubleMatrix1D>();
+		this.reverseGA = new ArrayList<DoubleMatrix1D>();
+		this.reverseFeatureF = new ArrayList<DoubleMatrix1D>();
 
 		for (int i = 0; i < dimGF; i++) {
 			this.GF.add(DoubleFactory1D.sparse.make(dimGF));
 			this.GA.add(DoubleFactory1D.sparse.make(dimGA));
 			this.featureF.add(DoubleFactory1D.sparse.make(dimFeatureF));
+
+			this.reverseGF.add(DoubleFactory1D.sparse.make(dimGF));
 		}
 
 		for (int i = 0; i < dimGA; i++) {
 			this.featureA.add(DoubleFactory1D.sparse.make(dimFeatureA));
+
+			this.reverseGA.add(DoubleFactory1D.sparse.make(dimGF));
+		}
+
+		for (int i = 0; i < dimFeatureF; i++) {
+			this.reverseFeatureF.add(DoubleFactory1D.sparse.make(dimGF));
 		}
 
 		this.userMap = new HashMap<String, Integer>();
@@ -228,8 +245,8 @@ public class MRP {
 		}
 	}
 
-	private void readData(String f, List<DoubleMatrix1D> container, IIndex idxP, IIndex idxM)
-			throws NumberFormatException, IOException {
+	private void readData(String f, List<DoubleMatrix1D> container, IIndex idxP, IIndex idxM,
+			List<DoubleMatrix1D> reverseContainer) throws NumberFormatException, IOException {
 		BufferedReader reader = null;
 		FileInputStream file = new FileInputStream(new File(f));
 		System.out.println("read " + f);
@@ -250,6 +267,9 @@ public class MRP {
 				System.out.println("shit!");
 			}
 			container.get(primaryId).setQuick(minorId, weight);
+			if (reverseContainer != null) {
+				reverseContainer.get(minorId).setQuick(primaryId, weight);
+			}
 		}
 		reader.close();
 	}
@@ -271,7 +291,7 @@ public class MRP {
 	class PredictAttribute implements Predict {
 		public double predict(int i, int j) {
 			double part1 = blas.ddot(H.viewRow(i), Z.viewRow(j));
-			DoubleMatrix1D y = DoubleFactory1D.dense.make(dimFeatureA);
+			DoubleMatrix1D y = DoubleFactory1D.dense.make(dimFeatureF);
 			blas.dgemv(false, 1.0, M, featureA.get(j), 0, y);
 			double part2 = blas.ddot(featureF.get(i), y);
 			return part1 + part2;
@@ -316,19 +336,10 @@ public class MRP {
 
 	/* update H V W */
 	class updateGF implements updateMethod {
-		public void update(DoubleMatrix1D ls, int curIdx) {
-
-			/* update W */
-			updateMD(ls, curIdx, featureF, featureF, pf, para.lambdaF, para.lambdaRW, W, para.lr);
-			/* update H */
-			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRH, H, V, para.lr);
-			/* update V */
-			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRV, V, H, para.lr);
-		}
 
 		@Override
 		public void updateH(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRH, H, V, para.lr);
+			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRH, H, V, para.lr, false);
 		}
 
 		@Override
@@ -337,7 +348,7 @@ public class MRP {
 
 		@Override
 		public void updateV(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRV, V, H, para.lr);
+			updateHV(ls, curIdx, pf, para.lambdaF, para.lambdaRV, V, H, para.lr, true);
 		}
 
 		@Override
@@ -352,24 +363,22 @@ public class MRP {
 		@Override
 		public void updateM(DoubleMatrix1D ls, int curIdx) {
 		}
+
+		@Override
+		public void update(DoubleMatrix1D ls, int curIdx) {
+			// TODO Auto-generated method stub
+			
+		}
 	}
 
 	updateGA uga = new updateGA();
 
 	/* update H Z M */
 	class updateGA implements updateMethod {
-		public void update(DoubleMatrix1D ls, int curIdx) {
-			/* update M */
-			updateMD(ls, curIdx, featureF, featureA, pa, para.lambdaF, para.lambdaRM, M, para.lr);
-			/* update H */
-			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRH, H, Z, para.lr);
-			/* update Z */
-			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRH, Z, H, para.lr);
-		}
 
 		@Override
 		public void updateH(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRH, H, Z, para.lr);
+			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRH, H, Z, para.lr, false);
 		}
 
 		@Override
@@ -385,7 +394,7 @@ public class MRP {
 
 		@Override
 		public void updateZ(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRH, Z, H, para.lr);
+			updateHV(ls, curIdx, pa, para.lambdaA, para.lambdaRZ, Z, H, para.lr, true);
 		}
 
 		@Override
@@ -396,6 +405,12 @@ public class MRP {
 		public void updateM(DoubleMatrix1D ls, int curIdx) {
 			updateMD(ls, curIdx, featureF, featureA, pa, para.lambdaF, para.lambdaRM, M, para.lr);
 		}
+
+		@Override
+		public void update(DoubleMatrix1D ls, int curIdx) {
+			// TODO Auto-generated method stub
+			
+		}
 	}
 
 	updateFF uff = new updateFF();
@@ -403,20 +418,16 @@ public class MRP {
 	/* update H U */
 	class updateFF implements updateMethod {
 		public void update(DoubleMatrix1D ls, int curIdx) {
-			/* update H */
-			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRH, H, U, para.lr);
-			/* update U */
-			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRU, U, H, para.lr);
 		}
 
 		@Override
 		public void updateH(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRH, H, U, para.lr);
+			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRH, H, U, para.lr, false);
 		}
 
 		@Override
 		public void updateU(DoubleMatrix1D ls, int curIdx) {
-			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRU, U, H, para.lr);
+			updateHV(ls, curIdx, pff, para.lambdaN, para.lambdaRU, U, H, para.lr, true);
 		}
 
 		@Override
@@ -437,9 +448,9 @@ public class MRP {
 	}
 
 	public List<Integer> shuffleIndex(int n) {
-		List<Integer> retArray = new ArrayList<Integer>(n);
+		List<Integer> retArray = new ArrayList<Integer>();
 		for (int i = 0; i < n; i++) {
-			retArray.set(i, i);
+			retArray.add(i, i);
 		}
 		Collections.shuffle(retArray);
 		return retArray;
@@ -447,32 +458,40 @@ public class MRP {
 
 	public void updateU2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
-			List<Integer> shuffle = shuffleIndex(this.featureF.size());
-			for (int i = 0; i < this.featureF.size(); i++) {
+			List<Integer> shuffle = shuffleIndex(this.reverseFeatureF.size());
+			for (int i = 0; i < this.reverseFeatureF.size(); i++) {
 				int index = shuffle.get(i);
-				uff.updateU(this.featureF.get(index), index);
+				uff.updateU(this.reverseFeatureF.get(index), index);
 			}
 		}
 	}
 
 	public void updateV2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
-			for (int i = 0; i < this.GF.size(); i++) {
-				ugf.updateV(this.GF.get(i), i);
+			List<Integer> shuffle = shuffleIndex(this.reverseGF.size());
+			for (int i = 0; i < this.reverseGF.size(); i++) {
+				int index = shuffle.get(i);
+				ugf.updateV(this.reverseGF.get(index), index);
 			}
 		}
 	}
 
 	public void updateH2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
+			List<Integer> shuffle = shuffleIndex(this.GF.size());
 			for (int i = 0; i < this.GF.size(); i++) {
-				ugf.updateH(this.GF.get(i), i);
+				int index = shuffle.get(i);
+				ugf.updateH(this.GF.get(index), index);
 			}
+			shuffle = shuffleIndex(this.GA.size());
 			for (int i = 0; i < this.GA.size(); i++) {
-				uga.updateH(this.GA.get(i), i);
+				int index = shuffle.get(i);
+				uga.updateH(this.GA.get(index), index);
 			}
+			shuffle = shuffleIndex(this.featureF.size());
 			for (int i = 0; i < this.featureF.size(); i++) {
-				uff.updateH(this.featureF.get(i), i);
+				int index = shuffle.get(i);
+				uff.updateH(this.featureF.get(index), index);
 			}
 		}
 
@@ -480,24 +499,30 @@ public class MRP {
 
 	public void updateW2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
+			List<Integer> shuffle = shuffleIndex(this.GF.size());
 			for (int i = 0; i < this.GF.size(); i++) {
-				ugf.updateW(this.GF.get(i), i);
+				int index = shuffle.get(i);
+				ugf.updateW(this.GF.get(index), index);
 			}
 		}
 	}
 
 	public void updateM2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
+			List<Integer> shuffle = shuffleIndex(this.GA.size());
 			for (int i = 0; i < this.GA.size(); i++) {
-				uga.updateM(this.GA.get(i), i);
+				int index = shuffle.get(i);
+				uga.updateM(this.GA.get(index), index);
 			}
 		}
 	}
 
 	public void updateZ2convergence() {
 		for (int t = 0; t < MRPPara.T; t++) {
-			for (int i = 0; i < this.GA.size(); i++) {
-				uga.updateZ(this.GA.get(i), i);
+			List<Integer> shuffle = shuffleIndex(this.reverseGA.size());
+			for (int i = 0; i < this.reverseGA.size(); i++) {
+				int index = shuffle.get(i);
+				uga.updateZ(this.reverseGA.get(index), index);
 			}
 		}
 	}
@@ -514,7 +539,6 @@ public class MRP {
 				double fakeVal = pp.predict(i, idx);
 				double diff = realVal - fakeVal;
 				err += diff * diff;
-				System.err.println(i + "," + j);
 			}
 		}
 		return err / size;
@@ -564,10 +588,10 @@ public class MRP {
 	}
 
 	public void readFromText(String fGA, String fGF, String fFF, String fFA) throws NumberFormatException, IOException {
-		readData(fGA, GA, useridx, attridx);
-		readData(fGF, GF, useridx, useridx);
-		readData(fFF, featureF, useridx, userfidx);
-		readData(fFA, featureA, attridx, attrfidx);
+		readData(fGA, GA, useridx, attridx, reverseGA);
+		readData(fGF, GF, useridx, useridx, reverseGF);
+		readData(fFF, featureF, useridx, userfidx, reverseFeatureF);
+		readData(fFA, featureA, attridx, attrfidx, null);
 	}
 
 	public void saveParas(String fName, int m, int n, DoubleMatrix2D matrix) throws IOException {
@@ -603,7 +627,7 @@ public class MRP {
 	public double evaluationFriendship(String fe, int lineCnt) throws NumberFormatException, IOException {
 		double retval = 0.0;
 		List<DoubleMatrix1D> le = new ArrayList<DoubleMatrix1D>(lineCnt);
-		this.readData(fe, le, this.useridx, this.useridx);
+		this.readData(fe, le, this.useridx, this.useridx, null);
 		int cnt = 0;
 		for (int i = 0; i < lineCnt; i++) {
 			for (int j = 0; j < le.get(i).size(); j++) {
@@ -619,7 +643,7 @@ public class MRP {
 	public double evaluationAttribute(String fe, int lineCnt) throws NumberFormatException, IOException {
 		double retval = 0.0;
 		List<DoubleMatrix1D> le = new ArrayList<DoubleMatrix1D>(lineCnt);
-		this.readData(fe, le, this.useridx, this.attridx);
+		this.readData(fe, le, this.useridx, this.attridx, null);
 		for (int i = 0; i < lineCnt; i++) {
 			for (int j = 0; j < le.get(i).size(); j++) {
 				double realVal = le.get(i).get(j);
