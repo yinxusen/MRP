@@ -53,10 +53,6 @@ public class MRP {
 	DoubleMatrix2D W = null;
 	DoubleMatrix2D M = null;
 
-	double[][] HH = null;
-	double[][] YH = null;
-	double[][] FM = null;
-
 	leastSquare l2 = leastSquare.getInstance();
 
 	List<DoubleMatrix1D> GF = null;
